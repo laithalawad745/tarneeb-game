@@ -11,22 +11,15 @@ import { useGameStore } from '@/lib/gameStore';
 
 // ============ مكوّن الطاولة ============
 function PokerTable() {
-  // الطاولة بتتحمل من ملف GLB
-  // المستخدم لازم يحط الملف بـ public/models/table.glb
-  try {
-    const { scene } = useGLTF('/models/table.glb');
-    return (
-      <primitive
-        object={scene}
-        scale={1}
-        position={[0, 0, 0]}
-        rotation={[0, 0, 0]}
-      />
-    );
-  } catch {
-    // Fallback - طاولة بسيطة إذا الملف مش موجود
-    return <FallbackTable />;
-  }
+  const { scene } = useGLTF('/models/table-small.glb', '/basis/');
+  return (
+    <primitive
+      object={scene}
+      scale={1}
+      position={[0, 0, 0]}
+      rotation={[0, 0, 0]}
+    />
+  );
 }
 
 // طاولة بسيطة كـ fallback
@@ -62,19 +55,20 @@ function FallbackTable() {
 }
 
 // ============ مكوّن الشخصية ============
+
 function Character({ seatIndex, name, isActive }: {
   seatIndex: number;
   name: string;
   isActive: boolean;
 }) {
-  const ref = useRef<THREE.Group>(null);
+  const { scene } = useGLTF('/models/scene.gltf');
+  const clone = scene.clone();
 
-  // مواقع الكراسي حول الطاولة
   const positions: [number, number, number][] = [
-    [0, 0, 3.5],    // مقعد 0 - اللاعب (أمام الكاميرا)
-    [3.5, 0, 0],    // مقعد 1 - يمين
-    [0, 0, -3.5],   // مقعد 2 - قبال
-    [-3.5, 0, 0],   // مقعد 3 - يسار
+    [0, -0.45, 2.2],
+    [2.2, -0.45, 0],
+    [0, -0.45, -2.2],
+    [-2.2, -0.45, 0],
   ];
 
   const rotations: [number, number, number][] = [
@@ -84,29 +78,9 @@ function Character({ seatIndex, name, isActive }: {
     [0, -Math.PI / 2, 0],
   ];
 
-  // تحميل الشخصية
-  // المستخدم لازم يحط الملف بـ public/models/character.glb
-  const colors = ['#4299e1', '#ed8936', '#48bb78', '#ed64a6'];
-
   return (
-    <group
-      ref={ref}
-      position={positions[seatIndex]}
-      rotation={rotations[seatIndex]}
-    >
-      {/* شخصية بسيطة (placeholder) */}
-      {/* الجسم */}
-      <mesh position={[0, 1.0, 0]} castShadow>
-        <capsuleGeometry args={[0.25, 0.5, 4, 8]} />
-        <meshStandardMaterial color={colors[seatIndex]} />
-      </mesh>
-      {/* الرأس */}
-      <mesh position={[0, 1.65, 0]} castShadow>
-        <sphereGeometry args={[0.2, 16, 16]} />
-        <meshStandardMaterial color="#ffd5b4" />
-      </mesh>
-
-      {/* اسم اللاعب */}
+    <group position={positions[seatIndex]} rotation={rotations[seatIndex]}>
+      <primitive object={clone} scale={0.5} />
       {seatIndex !== 0 && (
         <Html position={[0, 2.2, 0]} center>
           <div className={`player-badge text-center text-sm whitespace-nowrap ${isActive ? 'active' : ''}`}>
@@ -117,6 +91,8 @@ function Character({ seatIndex, name, isActive }: {
     </group>
   );
 }
+
+useGLTF.preload('/models/scene.gltf');
 
 // ============ كروت بإيد اللاعب ============
 function PlayerHand() {
@@ -349,4 +325,5 @@ export default function Game3DScene() {
 }
 
 // تحميل الملفات مسبقاً
-useGLTF.preload('/models/table.glb');
+useGLTF.preload('/models/table-small.glb', '/basis/');
+useGLTF.preload('/models/scene.gltf');
