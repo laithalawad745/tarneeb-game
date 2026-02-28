@@ -8,8 +8,13 @@ import { useGameStore } from '@/lib/gameStore';
 import { GameMode, PlayType } from '@/lib/types';
 import { MODE_NAMES } from '@/lib/gameLogic';
 
-// تحميل مكوّن Three.js بدون SSR
 const Game3DScene = dynamic(() => import('@/components/Game3DScene'), { ssr: false });
+
+interface PlayerInfo {
+  playerId: string;
+  playerName: string;
+  seatIndex: number;
+}
 
 export default function GamePage() {
   const params = useParams();
@@ -18,45 +23,143 @@ export default function GamePage() {
   const gameCode = searchParams.get('code') || '';
 
   const { gameState, setGameState, setMyPlayer } = useGameStore();
-  const [phase, setPhase] = useState<string>('waiting');
-  const [players, setPlayers] = useState<any[]>([]);
-  const [message, setMessage] = useState('');
-  const [showModeSelect, setShowModeSelect] = useState(false);
-  const [showTypeSelect, setShowTypeSelect] = useState(false);
 
-  // تهيئة اللاعب
+  const [phase, setPhase] = useState<string>('waiting');
+  const [players, setPlayers] = useState<PlayerInfo[]>([]);
+  const [message, setMessage] = useState('');
+
+  // النوافذ المنبثقة
+  const [showTypeSelect, setShowTypeSelect] = useState(false);
+  const [showPartnerSelect, setShowPartnerSelect] = useState(false);
+  const [showPartnerRequest, setShowPartnerRequest] = useState(false);
+  const [showModeSelect, setShowModeSelect] = useState(false);
+
+  // بيانات طلب الشراكة
+  const [partnerRequestFrom, setPartnerRequestFrom] = useState<string>('');
+  const [partnerRequestFromName, setPartnerRequestFromName] = useState<string>('');
+
+  const [myId, setMyId] = useState('');
+  const [isHost, setIsHost] = useState(false);
+
+  // ============ تهيئة اللاعب ============
   useEffect(() => {
     const playerId = localStorage.getItem('playerId') || '';
     const playerName = localStorage.getItem('playerName') || '';
+    const hostFlag = localStorage.getItem('isHost') === 'true';
     setMyPlayer(playerId, playerName);
+    setMyId(playerId);
+    setIsHost(hostFlag);
   }, [setMyPlayer]);
 
-  // الاتصال بـ Pusher
+  // ============ الاتصال بـ Pusher ============
   useEffect(() => {
     const pusher = getPusherClient();
     const channel = pusher.subscribe(`game-${gameId}`);
 
-    channel.bind('player-joined', (data: any) => {
-      setPlayers(prev => [...prev, data]);
+    // --- لاعب جديد انضم ---
+    channel.bind('player-joined', (data: PlayerInfo & { totalPlayers: number }) => {
+      setPlayers(prev => {
+        if (prev.some(p => p.playerId === data.playerId)) return prev;
+        return [...prev, { playerId: data.playerId, playerName: data.playerName, seatIndex: data.seatIndex }];
+      });
       setMessage(`${data.playerName} انضم للغرفة 🎉`);
 
+      // لما يكتمل 4 لاعبين — المضيف بس يشوف الاختيار
       if (data.totalPlayers === 4) {
-        setMessage('الغرفة اكتملت! جاهزين نبلش؟');
-        // المضيف يختار نوع اللعب
-        const hostId = localStorage.getItem('playerId');
-        if (players.length === 0 || hostId === players[0]?.playerId) {
+        setPhase('full');
+        setMessage('الغرفة اكتملت! ✅');
+        const hostFlag = localStorage.getItem('isHost') === 'true';
+        if (hostFlag) {
           setShowTypeSelect(true);
+        } else {
+          setMessage('المضيف يختار نوع اللعب...');
         }
       }
     });
 
-    channel.bind('type-chosen', (data: any) => {
-      setPhase('choosing_mode');
-      setMessage(`نوع اللعب: ${data.playType === 'partnership' ? 'شراكة' : 'يهودي'}`);
+    // --- نوع اللعب تم اختياره ---
+    channel.bind('type-chosen', (data: { playType: PlayType; hostId: string }) => {
       setShowTypeSelect(false);
-      setShowModeSelect(true);
+
+      if (data.playType === 'individual') {
+        setMessage('نوع اللعب: يهودي 🎯 كل واحد لحاله');
+        setPhase('choosing_mode');
+        // المضيف بس يختار التسمية
+        const hostFlag = localStorage.getItem('isHost') === 'true';
+        if (hostFlag) {
+          setShowModeSelect(true);
+        } else {
+          setMessage('المضيف يختار التسمية...');
+        }
+      } else {
+        setMessage('نوع اللعب: شراكة 👥');
+        // المضيف بس يشوف اختيار الشريك
+        const hostFlag = localStorage.getItem('isHost') === 'true';
+        if (hostFlag) {
+          setShowPartnerSelect(true);
+        } else {
+          setMessage('المضيف يختار شريكه...');
+        }
+      }
     });
 
+    // --- طلب شراكة وصل (للشريك المختار فقط) ---
+    channel.bind('partner-request', (data: { hostId: string; hostName: string; partnerId: string }) => {
+      const myPlayerId = localStorage.getItem('playerId');
+      if (myPlayerId === data.partnerId) {
+        // أنا الشريك المختار — أعرض قبول/رفض
+        setPartnerRequestFrom(data.hostId);
+        setPartnerRequestFromName(data.hostName);
+        setShowPartnerRequest(true);
+        setMessage(`${data.hostName} يبي يكون شريكك!`);
+      } else if (myPlayerId !== data.hostId) {
+        // أنا مش المضيف ولا الشريك — انتظر
+        setMessage(`${data.hostName} يختار شريكه...`);
+      }
+    });
+
+    // --- الشريك رفض ---
+    channel.bind('partner-rejected', (data: { partnerId: string; partnerName: string }) => {
+      setShowPartnerRequest(false);
+      const hostFlag = localStorage.getItem('isHost') === 'true';
+      if (hostFlag) {
+        setMessage(`${data.partnerName} رفض الشراكة 😢 اختار غيره`);
+        setShowPartnerSelect(true);
+      } else {
+        setMessage('الشريك رفض... المضيف يختار غيره');
+      }
+    });
+
+    // --- الشريك وافق ---
+    channel.bind('partner-accepted', (data: { hostId: string; partnerId: string; seating: PlayerInfo[] }) => {
+      setShowPartnerSelect(false);
+      setShowPartnerRequest(false);
+      setPlayers(data.seating);
+
+      const myPlayerId = localStorage.getItem('playerId');
+      const partner = data.seating.find(p => p.playerId === data.partnerId);
+      const host = data.seating.find(p => p.playerId === data.hostId);
+
+      if (myPlayerId === data.hostId) {
+        setMessage(`شريكك: ${partner?.playerName} 🤝`);
+      } else if (myPlayerId === data.partnerId) {
+        setMessage(`شريكك: ${host?.playerName} 🤝`);
+      } else {
+        setMessage(`${host?.playerName} و ${partner?.playerName} فريق 🤝`);
+      }
+
+      setTimeout(() => {
+        setPhase('choosing_mode');
+        const hostFlag = localStorage.getItem('isHost') === 'true';
+        if (hostFlag) {
+          setShowModeSelect(true);
+        } else {
+          setMessage('المضيف يختار التسمية...');
+        }
+      }, 2000);
+    });
+
+    // --- التسمية تم اختيارها ---
     channel.bind('mode-chosen', (data: any) => {
       setPhase('playing');
       setShowModeSelect(false);
@@ -64,43 +167,46 @@ export default function GamePage() {
       setMessage(`التسمية: ${MODE_NAMES[data.mode as GameMode]}`);
     });
 
+    // --- كرت انلعب ---
     channel.bind('card-played', (data: any) => {
-      setMessage(`لاعب لعب كرت`);
+      if (data.state) setGameState(data.state);
     });
 
+    // --- نهاية الجولة ---
     channel.bind('round-end', (data: any) => {
-      setMessage(`اللمّة لـ ${data.winnerId}`);
+      if (data.state) setGameState(data.state);
+      const winner = players.find(p => p.playerId === data.winnerId);
+      setMessage(`اللمّة لـ ${winner?.playerName || 'لاعب'} 🏆`);
     });
 
+    // --- نهاية البرتية ---
     channel.bind('deal-end', (data: any) => {
+      if (data.state) setGameState(data.state);
       setPhase('choosing_mode');
-      setShowModeSelect(true);
-      setMessage('البرتية خلصت! اختار التسمية الجاية');
+      const hostFlag = localStorage.getItem('isHost') === 'true';
+      if (hostFlag) {
+        setShowModeSelect(true);
+      }
+      setMessage('البرتية خلصت!');
     });
 
-    channel.bind('cheat-steal', (data: any) => {
-      // ما نعرض تفاصيل - بس نعرف إنو صار شي
+    // --- نهاية اللعبة ---
+    channel.bind('game-end', (data: any) => {
+      setPhase('game_end');
+      setMessage('اللعبة خلصت! 🎉');
     });
 
     channel.bind('cheat-revealed', (data: any) => {
-      if (data.caught) {
-        setMessage(`🚨 انكشف الغش! عقوبة: ${data.penalty} نقطة`);
-      } else {
-        setMessage(`✅ ما في غش - اتهام خاطئ`);
-      }
-    });
-
-    channel.bind('pass', (data: any) => {
-      setMessage(`لاعب قال باص`);
+      setMessage(data.caught ? `🚨 انكشف الغش! عقوبة: ${data.penalty}` : '✅ اتهام خاطئ');
     });
 
     return () => {
       channel.unbind_all();
       pusher.unsubscribe(`game-${gameId}`);
     };
-  }, [gameId, players, setGameState]);
+  }, [gameId, setGameState]);
 
-  // إرسال أكشن للسيرفر
+  // ============ إرسال أكشن ============
   const sendAction = useCallback(async (action: string, payload: any = {}) => {
     const playerId = localStorage.getItem('playerId');
     try {
@@ -110,28 +216,22 @@ export default function GamePage() {
         body: JSON.stringify({ gameId, playerId, action, payload }),
       });
       const data = await res.json();
-      if (data.error) {
-        setMessage(`❌ ${data.error}`);
-      }
-      if (data.state) {
-        setGameState(data.state);
-      }
-    } catch (err) {
+      if (data.error) setMessage(`❌ ${data.error}`);
+      if (data.state) setGameState(data.state);
+    } catch {
       setMessage('❌ خطأ بالاتصال');
     }
   }, [gameId, setGameState]);
 
   return (
     <div className="w-screen h-screen relative overflow-hidden">
-      {/* مشهد Three.js ثلاثي الأبعاد */}
       <div className="game-canvas">
         <Game3DScene />
       </div>
 
-      {/* واجهة المستخدم */}
       <div className="game-ui">
-        {/* شريط علوي - كود الغرفة والرسائل */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-4">
+        {/* كود الغرفة */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2">
           <div className="player-badge text-center">
             <div className="text-xs text-gray-400">كود الغرفة</div>
             <div className="text-xl font-bold tracking-widest" style={{ color: '#d4a843', direction: 'ltr' }}>
@@ -140,16 +240,14 @@ export default function GamePage() {
           </div>
         </div>
 
-        {/* رسالة الحالة */}
+        {/* رسالة */}
         {message && (
           <div className="absolute top-20 left-1/2 -translate-x-1/2">
-            <div className="player-badge text-center animate-pulse">
-              {message}
-            </div>
+            <div className="player-badge text-center animate-pulse">{message}</div>
           </div>
         )}
 
-        {/* شاشة الانتظار */}
+        {/* ======== الانتظار ======== */}
         {phase === 'waiting' && (
           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-center">
             <div className="player-badge space-y-2">
@@ -157,45 +255,124 @@ export default function GamePage() {
               <div className="text-3xl font-bold" style={{ color: '#d4a843' }}>
                 {players.length + 1} / 4
               </div>
-              <div className="text-sm text-gray-400">
-                شارك الكود مع أصحابك
-              </div>
+              <div className="text-sm text-gray-400">شارك الكود مع أصحابك</div>
             </div>
           </div>
         )}
 
-        {/* اختيار نوع اللعب */}
+        {/* ======== اختيار نوع اللعب (المضيف فقط) ======== */}
         {showTypeSelect && (
           <div className="modal-overlay">
             <div className="modal-content text-center space-y-6">
               <h2 className="text-2xl font-bold" style={{ color: '#d4a843' }}>
-                اختار نوع اللعب
+                🎮 اختار نوع اللعب
               </h2>
+              <div className="flex flex-wrap justify-center gap-2 mb-4">
+                {players.map(p => (
+                  <span key={p.playerId} className="px-3 py-1 rounded-full text-sm"
+                    style={{ background: 'rgba(212,168,67,0.2)', color: '#d4a843' }}>
+                    {p.playerName}
+                  </span>
+                ))}
+              </div>
               <div className="space-y-3">
-                <button
-                  onClick={() => sendAction('choose_type', { playType: 'partnership' })}
-                  className="btn-game w-full"
-                >
-                  👥 شراكة (2 ضد 2)
-                </button>
                 <button
                   onClick={() => sendAction('choose_type', { playType: 'individual' })}
                   className="btn-game w-full"
-                  style={{ background: 'linear-gradient(135deg, #dc2626, #991b1b)' }}
                 >
-                  🎯 يهودي (كل واحد لحاله)
+                  🎯 يهودي — كل واحد لحاله
+                </button>
+                <button
+                  onClick={() => sendAction('choose_type', { playType: 'partnership' })}
+                  className="btn-game w-full"
+                  style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white' }}
+                >
+                  👥 شراكة — 2 ضد 2
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* اختيار التسمية */}
+        {/* ======== اختيار الشريك (المضيف فقط) ======== */}
+        {showPartnerSelect && (
+          <div className="modal-overlay">
+            <div className="modal-content text-center space-y-6">
+              <h2 className="text-2xl font-bold" style={{ color: '#d4a843' }}>
+                🤝 اختار شريكك
+              </h2>
+              <p className="text-gray-400 text-sm">شريكك راح يكون قبالك على الطاولة</p>
+              <div className="space-y-3">
+                {players
+                  .filter(p => p.playerId !== myId)
+                  .map(p => (
+                    <button
+                      key={p.playerId}
+                      onClick={() => {
+                        sendAction('request_partner', { partnerId: p.playerId });
+                        setShowPartnerSelect(false);
+                        setMessage(`بانتظار موافقة ${p.playerName}...`);
+                      }}
+                      className="btn-game w-full text-lg"
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(212,168,67,0.3), rgba(212,168,67,0.1))',
+                        border: '2px solid rgba(212,168,67,0.5)',
+                        color: 'white',
+                      }}
+                    >
+                      👤 {p.playerName}
+                    </button>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======== طلب شراكة (الشريك المختار فقط) ======== */}
+        {showPartnerRequest && (
+          <div className="modal-overlay">
+            <div className="modal-content text-center space-y-6">
+              <h2 className="text-2xl font-bold" style={{ color: '#d4a843' }}>
+                🤝 طلب شراكة
+              </h2>
+              <p className="text-lg text-white">
+                <span style={{ color: '#d4a843' }}>{partnerRequestFromName}</span> يبي يكون شريكك
+              </p>
+              <p className="text-gray-400 text-sm">رح تكونوا فريق واحد ضد الثنين الباقيين</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    sendAction('respond_partner', { hostId: partnerRequestFrom, accepted: true });
+                    setShowPartnerRequest(false);
+                    setMessage('وافقت على الشراكة! 🤝');
+                  }}
+                  className="btn-game flex-1 text-lg"
+                  style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}
+                >
+                  ✅ موافق
+                </button>
+                <button
+                  onClick={() => {
+                    sendAction('respond_partner', { hostId: partnerRequestFrom, accepted: false });
+                    setShowPartnerRequest(false);
+                    setMessage('رفضت الشراكة');
+                  }}
+                  className="btn-game flex-1 text-lg"
+                  style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
+                >
+                  ❌ رفض
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======== اختيار التسمية (المضيف فقط) ======== */}
         {showModeSelect && (
           <div className="modal-overlay">
             <div className="modal-content text-center space-y-6">
               <h2 className="text-2xl font-bold" style={{ color: '#d4a843' }}>
-                اختار التسمية
+                🎴 اختار التسمية
               </h2>
               <div className="grid grid-cols-2 gap-3">
                 {(['queens', 'diamonds', 'tricks', 'tarneeb'] as GameMode[]).map(mode => {
@@ -206,12 +383,19 @@ export default function GamePage() {
                       onClick={() => !used && sendAction('choose_mode', { mode })}
                       disabled={used}
                       className={`btn-game ${used ? 'opacity-30 cursor-not-allowed' : ''}`}
-                      style={!used ? undefined : { background: '#555' }}
+                      style={!used ? {
+                        background: mode === 'queens' ? 'linear-gradient(135deg, #ec4899, #be185d)' :
+                          mode === 'diamonds' ? 'linear-gradient(135deg, #f59e0b, #d97706)' :
+                            mode === 'tricks' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' :
+                              'linear-gradient(135deg, #ef4444, #991b1b)',
+                        color: 'white',
+                      } : undefined}
                     >
                       {mode === 'queens' && '👸 بنات'}
-                      {mode === 'diamonds' && '♦️ ديناري'}
+                      {mode === 'diamonds' && '💎 ديناري'}
                       {mode === 'tricks' && '🃏 لطش'}
                       {mode === 'tarneeb' && '💀 تركس'}
+                      {used && ' ✓'}
                     </button>
                   );
                 })}
@@ -220,36 +404,23 @@ export default function GamePage() {
           </div>
         )}
 
-        {/* أزرار الغش والاتهام */}
+        {/* ======== زر لعب الكرت ======== */}
         {phase === 'playing' && (
-          <div className="absolute bottom-4 right-4 space-y-2">
-            <button
-              onClick={() => sendAction('steal_card')}
-              className="btn-cheat block"
-            >
-              🫳 اسرق كرت
-            </button>
-            <button
-              onClick={() => {/* فتح قائمة اللاعبين للاتهام */}}
-              className="btn-cheat block"
-              style={{ background: 'linear-gradient(135deg, #9333ea, #6b21a8)' }}
-            >
-              🔍 اتّهم بالغش
-            </button>
-          </div>
-        )}
-
-        {/* النقاط */}
-        {gameState?.scores && Object.keys(gameState.scores).length > 0 && (
-          <div className="absolute top-4 right-4">
-            <div className="player-badge">
-              <div className="text-xs text-gray-400 mb-1">النقاط</div>
-              {Object.entries(gameState.scores).map(([pid, score]) => (
-                <div key={pid} className="text-sm">
-                  {gameState.players.find(p => p.id === pid)?.name}: {score}
-                </div>
-              ))}
-            </div>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-3">
+            {useGameStore.getState().selectedCard && useGameStore.getState().isMyTurn() && (
+              <button
+                onClick={() => {
+                  const card = useGameStore.getState().selectedCard;
+                  if (card) {
+                    sendAction('play_card', { card });
+                    useGameStore.getState().selectCard(null);
+                  }
+                }}
+                className="btn-game"
+              >
+                🎴 العب الكرت
+              </button>
+            )}
           </div>
         )}
       </div>

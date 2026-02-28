@@ -4,7 +4,7 @@ import { getPusherServer } from '@/lib/pusherServer';
 import {
   playCard, startNewDeal, startNewRound, isRoundComplete,
   isDealComplete, getRoundWinner, calculateScores, stealCard,
-  accuseCheat, handlePass, getAvailableModes, CHEAT_PENALTIES,
+  accuseCheat, handlePass, getAvailableModes,
 } from '@/lib/gameLogic';
 import { GameState, GameMode, PlayType, Card } from '@/lib/types';
 
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     // جلب حالة اللعبة
     const { data: game, error } = await supabase
       .from('games')
-      .select('*')
+      .select('*, game_players(*, players(*))')
       .eq('id', gameId)
       .single();
 
@@ -25,32 +25,135 @@ export async function POST(req: NextRequest) {
     }
 
     let state: GameState = game.state;
-    let eventType = '';
-    let eventData: any = {};
+
+    // التحقق إنو المضيف (لبعض الأكشنز)
+    const isHost = game.host_id === playerId;
 
     switch (action) {
-      // ========== اختيار نوع اللعب ==========
+      // ========== اختيار نوع اللعب (المضيف فقط) ==========
       case 'choose_type': {
-        const { playType } = payload as { playType: PlayType };
-        state = { ...state, playType, phase: 'choosing_mode' };
-
-        if (playType === 'partnership') {
-          // فريق 1: مقعد 0+2، فريق 2: مقعد 1+3
-          const team1 = state.players.filter(p => p.seatIndex % 2 === 0).map(p => p.id) as [string, string];
-          const team2 = state.players.filter(p => p.seatIndex % 2 === 1).map(p => p.id) as [string, string];
-          state.teams = [
-            { players: team1, score: 0 },
-            { players: team2, score: 0 },
-          ];
+        if (!isHost) {
+          return NextResponse.json({ error: 'بس المضيف يقدر يختار' }, { status: 403 });
         }
 
-        eventType = 'type-chosen';
-        eventData = { playType };
-        break;
+        const { playType } = payload as { playType: PlayType };
+        state = { ...state, playType };
+
+        if (playType === 'individual') {
+          // يهودي: ترتيب عشوائي
+          const shuffled = [...state.players].sort(() => Math.random() - 0.5);
+          state.players = shuffled.map((p, i) => ({ ...p, seatIndex: i }));
+          state.phase = 'choosing_mode';
+        } else {
+          // شراكة: ننتظر اختيار الشريك
+          state.phase = 'choosing_type';
+        }
+
+        await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
+
+        await pusher.trigger(`game-${gameId}`, 'type-chosen', {
+          playType,
+          hostId: playerId,
+        });
+
+        return NextResponse.json({ success: true, state });
       }
 
-      // ========== اختيار التسمية ==========
+      // ========== طلب شراكة (المضيف يرسل طلب للشريك) ==========
+      case 'request_partner': {
+        if (!isHost) {
+          return NextResponse.json({ error: 'بس المضيف يقدر يختار شريك' }, { status: 403 });
+        }
+
+        const { partnerId } = payload as { partnerId: string };
+        const hostPlayer = state.players.find(p => p.id === playerId);
+
+        await pusher.trigger(`game-${gameId}`, 'partner-request', {
+          hostId: playerId,
+          hostName: hostPlayer?.name || 'المضيف',
+          partnerId,
+        });
+
+        return NextResponse.json({ success: true });
+      }
+
+      // ========== رد الشريك (قبول/رفض) ==========
+      case 'respond_partner': {
+        const { hostId, accepted } = payload as { hostId: string; accepted: boolean };
+
+        if (!accepted) {
+          // الشريك رفض — أخبر المضيف يختار غيره
+          const partnerPlayer = state.players.find(p => p.id === playerId);
+
+          await pusher.trigger(`game-${gameId}`, 'partner-rejected', {
+            partnerId: playerId,
+            partnerName: partnerPlayer?.name || 'لاعب',
+          });
+
+          return NextResponse.json({ success: true });
+        }
+
+        // ============================================================
+        // الشريك وافق — نرتب المقاعد:
+        //   المضيف = مقعد 0 (الكاميرا)
+        //   الشريك = مقعد 2 (قبال المضيف)
+        //   الباقيين = مقعد 1 و 3 (عشوائي)
+        // ============================================================
+
+        const host = state.players.find(p => p.id === hostId);
+        const partner = state.players.find(p => p.id === playerId);
+        const others = state.players.filter(p => p.id !== hostId && p.id !== playerId);
+
+        if (!host || !partner) {
+          return NextResponse.json({ error: 'لاعب مش موجود' }, { status: 400 });
+        }
+
+        const shuffledOthers = others.sort(() => Math.random() - 0.5);
+
+        const seatedPlayers = [
+          { ...host, seatIndex: 0 },
+          { ...shuffledOthers[0], seatIndex: 1 },
+          { ...partner, seatIndex: 2 },
+          { ...shuffledOthers[1], seatIndex: 3 },
+        ];
+
+        state.players = seatedPlayers;
+        state.teams = [
+          { players: [host.id, playerId] as [string, string], score: 0 },
+          { players: [shuffledOthers[0].id, shuffledOthers[1].id] as [string, string], score: 0 },
+        ];
+        state.phase = 'choosing_mode';
+
+        // تحديث المقاعد بالداتابيس
+        for (const p of seatedPlayers) {
+          await supabase
+            .from('game_players')
+            .update({ seat_index: p.seatIndex })
+            .eq('game_id', gameId)
+            .eq('player_id', p.id);
+        }
+
+        await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
+
+        await pusher.trigger(`game-${gameId}`, 'partner-accepted', {
+          hostId,
+          partnerId: playerId,
+          seating: seatedPlayers.map(p => ({
+            playerId: p.id,
+            playerName: p.name,
+            seatIndex: p.seatIndex,
+          })),
+        });
+
+        return NextResponse.json({ success: true, state });
+      }
+
+      // ========== اختيار التسمية (المضيف فقط) ==========
       case 'choose_mode': {
+        if (!isHost) {
+          return NextResponse.json({ error: 'بس المضيف يقدر يختار التسمية' }, { status: 403 });
+        }
+
         const { mode } = payload as { mode: GameMode };
         const available = getAvailableModes(state);
 
@@ -61,9 +164,11 @@ export async function POST(req: NextRequest) {
         state = startNewDeal(state, mode);
         state = startNewRound(state, state.chooserIndex);
 
-        eventType = 'mode-chosen';
-        eventData = { mode, state };
-        break;
+        await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
+
+        await pusher.trigger(`game-${gameId}`, 'mode-chosen', { mode, state });
+
+        return NextResponse.json({ success: true, state });
       }
 
       // ========== لعب كرت ==========
@@ -71,191 +176,93 @@ export async function POST(req: NextRequest) {
         const { card } = payload as { card: Card };
         state = playCard(state, playerId, card);
 
-        eventType = 'card-played';
-        eventData = { playerId, card };
+        let eventType = 'card-played';
+        let eventData: any = { playerId, card, state };
 
-        // هل خلصت الجولة؟
         if (isRoundComplete(state)) {
           const round = state.currentDeal!.rounds[state.currentDeal!.currentRound];
           const winnerId = getRoundWinner(round);
-          const wonCards = round.cardsPlayed.map(cp => cp.card);
 
-          // أضف اللمّة للفائز
-          state = {
-            ...state,
-            players: state.players.map(p => {
-              if (p.id === winnerId) {
-                return { ...p, tricksWon: [...p.tricksWon, wonCards] };
-              }
-              return p;
-            }),
-          };
+          const winner = state.players.find(p => p.id === winnerId);
+          if (winner) {
+            winner.tricksWon.push(round.cardsPlayed.map(cp => cp.card));
+          }
 
-          // هل خلصت البرتية؟
           if (isDealComplete(state)) {
-            const scores = calculateScores(
-              state.players,
-              state.currentDeal!.gameMode,
-              state.playType,
-              state.teams
-            );
-
-            // تحديث النقاط
+            const scores = calculateScores(state);
             for (const [pid, score] of Object.entries(scores.playerScores)) {
               state.scores[pid] = (state.scores[pid] || 0) + score;
             }
 
-            // حفظ النقاط بالداتابيز
-            for (const [pid, score] of Object.entries(scores.playerScores)) {
-              await supabase.from('scores').insert({
-                game_id: gameId,
-                player_id: pid,
-                deal_number: state.dealNumber,
-                game_mode: state.currentDeal!.gameMode,
-                score,
-              });
-            }
+            const currentMode = state.currentDeal!.gameMode;
+            state.currentDeal = null;
+            state.usedModes.push(currentMode);
 
-            // الدور اللي بعده يختار
-            state.chooserIndex = (state.chooserIndex + 1) % 4;
-            state.phase = state.usedModes.length >= 4 ? 'game_end' : 'choosing_mode';
+            await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
 
-            eventType = 'deal-end';
-            eventData = { scores: scores.playerScores, totalScores: state.scores };
+            await pusher.trigger(`game-${gameId}`, 'card-played', eventData);
+            await pusher.trigger(`game-${gameId}`, 'round-end', { winnerId, state });
+            await pusher.trigger(`game-${gameId}`, 'deal-end', { scores: scores.playerScores, state });
+
+            return NextResponse.json({ success: true, state });
           } else {
-            // جولة جديدة - اللي ربح يفتح
-            const winnerIdx = state.players.findIndex(p => p.id === winnerId);
-            state = startNewRound(state, winnerIdx);
-            eventType = 'round-end';
-            eventData = { winnerId, wonCards };
+            state = startNewRound(state, state.players.findIndex(p => p.id === winnerId));
+
+            await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
+
+            await pusher.trigger(`game-${gameId}`, 'card-played', eventData);
+            await pusher.trigger(`game-${gameId}`, 'round-end', { winnerId, state });
+
+            return NextResponse.json({ success: true, state });
           }
         }
-        break;
+
+        await supabase.from('games').update({ state, phase: state.phase }).eq('id', gameId);
+        await pusher.trigger(`game-${gameId}`, eventType, eventData);
+
+        return NextResponse.json({ success: true, state });
       }
 
-      // ========== باص (بالتركس) ==========
-      case 'pass': {
-        const player = state.players.find(p => p.id === playerId)!;
-        const round = state.currentDeal!.rounds[state.currentDeal!.currentRound];
-        const { isValidPass, isCheating } = handlePass(
-          player, round.leadSuit, state.currentDeal!.gameMode
-        );
-
-        if (!isValidPass) {
-          return NextResponse.json({ error: 'ما بتقدر تعمل باص' }, { status: 400 });
-        }
-
-        if (isCheating) {
-          state = {
-            ...state,
-            players: state.players.map(p =>
-              p.id === playerId ? { ...p, hasCheated: true } : p
-            ),
-          };
-        }
-
-        // انتقل للاعب التالي
-        const updatedRound = {
-          ...round,
-          currentPlayerIndex: (round.currentPlayerIndex + 1) % 4,
-        };
-        const rounds = [...state.currentDeal!.rounds];
-        rounds[state.currentDeal!.currentRound] = updatedRound;
-        state = {
-          ...state,
-          currentDeal: { ...state.currentDeal!, rounds },
-        };
-
-        eventType = 'pass';
-        eventData = { playerId };
-        break;
-      }
-
-      // ========== سرقة كرت (غش) ==========
+      // ========== سرقة كرت ==========
       case 'steal_card': {
-        const player = state.players.find(p => p.id === playerId)!;
-        const result = stealCard(player);
+        const { targetId } = payload as { targetId: string };
+        state = stealCard(state, playerId, targetId);
 
-        if (!result) {
-          return NextResponse.json({ error: 'ما بتقدر تسرق كرت' }, { status: 400 });
-        }
+        await supabase.from('games').update({ state }).eq('id', gameId);
+        await pusher.trigger(`game-${gameId}`, 'cheat-steal', { playerId });
 
-        state = {
-          ...state,
-          players: state.players.map(p =>
-            p.id === playerId ? result.player : p
-          ),
-        };
-
-        // ما نرسل تفاصيل الكرت المسروق للكل - بس نخبرهم إنو صار شي
-        eventType = 'cheat-steal';
-        eventData = { playerId };
-        break;
+        return NextResponse.json({ success: true, state });
       }
 
-      // ========== اتهام بالغش ==========
+      // ========== اتهام غش ==========
       case 'accuse_cheat': {
         const { accusedId } = payload as { accusedId: string };
-        const accuser = state.players.find(p => p.id === playerId)!;
-        const accused = state.players.find(p => p.id === accusedId)!;
+        const result = accuseCheat(state, playerId, accusedId);
+        state = result.state;
 
-        const { caught, penalty, updatedAccuser, updatedAccused } = accuseCheat(
-          accuser, accused, state.currentDeal!.gameMode, state.playType
-        );
-
-        state = {
-          ...state,
-          players: state.players.map(p => {
-            if (p.id === playerId) return updatedAccuser;
-            if (p.id === accusedId) return updatedAccused;
-            return p;
-          }),
-        };
-
-        // بحالة الشراكة - العقوبة على الفريق
-        if (caught && state.playType === 'partnership' && state.teams) {
-          const teamIdx = state.teams.findIndex(t => t.players.includes(accusedId));
-          if (teamIdx >= 0) {
-            state.scores[state.teams[teamIdx].players[0]] =
-              (state.scores[state.teams[teamIdx].players[0]] || 0) - penalty / 2;
-            state.scores[state.teams[teamIdx].players[1]] =
-              (state.scores[state.teams[teamIdx].players[1]] || 0) - penalty / 2;
-          }
-        } else if (caught) {
-          state.scores[accusedId] = (state.scores[accusedId] || 0) - penalty;
-        }
-
-        // حفظ سجل الغش
-        await supabase.from('cheat_log').insert({
-          game_id: gameId,
-          accuser_id: playerId,
-          accused_id: accusedId,
-          was_caught: caught,
-          penalty,
-          game_mode: state.currentDeal!.gameMode,
+        await supabase.from('games').update({ state }).eq('id', gameId);
+        await pusher.trigger(`game-${gameId}`, 'cheat-revealed', {
+          accuserId: playerId, accusedId, caught: result.caught, penalty: result.penalty,
         });
 
-        eventType = 'cheat-revealed';
-        eventData = { accuserId: playerId, accusedId, caught, penalty };
-        break;
+        return NextResponse.json({ success: true, state });
+      }
+
+      // ========== باص ==========
+      case 'pass': {
+        state = handlePass(state, playerId);
+
+        await supabase.from('games').update({ state }).eq('id', gameId);
+        await pusher.trigger(`game-${gameId}`, 'pass', { playerId });
+
+        return NextResponse.json({ success: true, state });
       }
 
       default:
         return NextResponse.json({ error: 'أكشن مش معروف' }, { status: 400 });
     }
-
-    // حفظ الحالة بالداتابيز
-    await supabase
-      .from('games')
-      .update({ state, phase: state.phase })
-      .eq('id', gameId);
-
-    // إرسال الحدث لكل اللاعبين
-    await pusher.trigger(`game-${gameId}`, eventType, eventData);
-
-    return NextResponse.json({ success: true, state });
   } catch (error: any) {
-    console.error('Game action error:', error);
+    console.error('Action error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

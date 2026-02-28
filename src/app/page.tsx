@@ -29,9 +29,10 @@ export default function Home() {
 
       if (data.error) throw new Error(data.error);
 
-      // حفظ معلومات اللاعب
       localStorage.setItem('playerId', data.playerId);
       localStorage.setItem('playerName', playerName.trim());
+      localStorage.setItem('seatIndex', String(data.seatIndex));
+      localStorage.setItem('isHost', 'true'); // ← المضيف
 
       router.push(`/game/${data.gameId}?code=${data.gameCode}`);
     } catch (err: any) {
@@ -68,6 +69,8 @@ export default function Home() {
 
       localStorage.setItem('playerId', data.playerId);
       localStorage.setItem('playerName', playerName.trim());
+      localStorage.setItem('seatIndex', String(data.seatIndex));
+      localStorage.setItem('isHost', 'false'); // ← مش مضيف
 
       router.push(`/game/${data.gameId}?code=${data.gameCode}`);
     } catch (err: any) {
