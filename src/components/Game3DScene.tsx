@@ -13,6 +13,7 @@ import Character from './3d/Character';
 import PlayerHand from './3d/PlayerHand';
 import TableCards from './3d/TableCards';
 import WonTricks from './3d/WonTricks';
+import OpponentHands from './3d/OpponentHands';
 
 // ============ إعدادات الكاميرا ============
 function FirstPersonCamera() {
@@ -39,10 +40,6 @@ function DarkFloor() {
 }
 
 // ============ مواقع الـ 3 خصوم حول الطاولة ============
-// مقعد 0 = أنت (الكاميرا) — ما بتشوف حالك
-// مقعد 1 = يمينك
-// مقعد 2 = قبالك (الشريك بحالة الشراكة)
-// مقعد 3 = يسارك
 const SEAT_POSITIONS: Record<number, { position: [number, number, number]; rotation: [number, number, number] }> = {
   1: {
     position: [1.3, -0.45, 0],
@@ -65,13 +62,8 @@ export default function Game3DScene() {
 
   // حساب الخصوم الـ 3 مع مواقعهم
   const opponents = (() => {
-    if (!gameState || !myPlayerId) {
-      // ما في لعبة بعد - عرض افتراضي
-      return [
-        { name: 'لاعب 2', seatIndex: 1, isActive: false, isPartner: false },
-        { name: 'لاعب 3', seatIndex: 2, isActive: false, isPartner: false },
-        { name: 'لاعب 4', seatIndex: 3, isActive: false, isPartner: false },
-      ];
+    if (!gameState || !myPlayerId || gameState.players.length === 0) {
+      return [];
     }
 
     const myPlayer = gameState.players.find(p => p.id === myPlayerId);
@@ -79,25 +71,16 @@ export default function Game3DScene() {
 
     const mySeat = myPlayer.seatIndex;
 
-    // الخصوم = كل اللاعبين ما عدا أنا
     return gameState.players
       .filter(p => p.id !== myPlayerId)
       .map(p => {
-        // ============================================================
-        // حساب الموقع النسبي
-        // إذا أنا مقعد 0: المقاعد 1,2,3 تبقى كما هي
-        // إذا أنا مقعد 1: المقعد 2 يصير يميني (1)، 3 قبالي (2)، 0 يساري (3)
-        // الفكرة: (seatIndex - mySeat + 4) % 4
-        // ============================================================
         const relativeSeat = (p.seatIndex - mySeat + 4) % 4;
 
-        // هل هو شريكي؟
         const isPartner = gameState.playType === 'partnership' &&
           gameState.teams?.some(t =>
             t.players.includes(myPlayerId) && t.players.includes(p.id)
           );
 
-        // هل دوره الحالي؟
         let isActive = false;
         if (gameState.currentDeal) {
           const round = gameState.currentDeal.rounds[gameState.currentDeal.currentRound];
@@ -114,7 +97,7 @@ export default function Game3DScene() {
           isPartner,
         };
       })
-      .filter(p => p.seatIndex !== 0); // أنا مقعد 0 - ما أعرض حالي
+      .filter(p => p.seatIndex !== 0);
   })();
 
   return (
@@ -162,10 +145,13 @@ export default function Game3DScene() {
             );
           })}
 
-          {/* كروت اللاعب */}
+          {/* كروت اللاعب (وجه) */}
           <PlayerHand />
 
-          {/* كروت الطاولة */}
+          {/* كروت الخصوم (ظهر — مقلوبة مع العدد) */}
+          <OpponentHands />
+
+          {/* كروت الطاولة (الملعوبة) */}
           <TableCards />
 
           {/* اللمّات */}

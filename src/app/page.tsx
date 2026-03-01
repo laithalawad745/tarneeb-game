@@ -32,7 +32,15 @@ export default function Home() {
       localStorage.setItem('playerId', data.playerId);
       localStorage.setItem('playerName', playerName.trim());
       localStorage.setItem('seatIndex', String(data.seatIndex));
-      localStorage.setItem('isHost', 'true'); // ← المضيف
+      localStorage.setItem('isHost', 'true');
+
+      // تخزين اللاعب الأول (المضيف) عشان صفحة اللعبة تقرأه فوراً
+      const initialPlayers = [{
+        playerId: data.playerId,
+        playerName: playerName.trim(),
+        seatIndex: 0,
+      }];
+      localStorage.setItem('cachedPlayers', JSON.stringify(initialPlayers));
 
       router.push(`/game/${data.gameId}?code=${data.gameCode}`);
     } catch (err: any) {
@@ -70,7 +78,13 @@ export default function Home() {
       localStorage.setItem('playerId', data.playerId);
       localStorage.setItem('playerName', playerName.trim());
       localStorage.setItem('seatIndex', String(data.seatIndex));
-      localStorage.setItem('isHost', 'false'); // ← مش مضيف
+      localStorage.setItem('isHost', 'false');
+
+      // ====== تخزين كل اللاعبين — صفحة اللعبة بتقرأهم فوراً بدون ما تنتظر fetch ======
+      if (data.allPlayers) {
+        localStorage.setItem('cachedPlayers', JSON.stringify(data.allPlayers));
+        console.log('[HOME] تم تخزين اللاعبين:', data.allPlayers.length);
+      }
 
       router.push(`/game/${data.gameId}?code=${data.gameCode}`);
     } catch (err: any) {
@@ -88,7 +102,7 @@ export default function Home() {
         {/* اللوغو */}
         <div className="space-y-2">
           <h1 className="text-6xl font-black" style={{ color: '#d4a843' }}>
-            🃏 تركس
+            تركس
           </h1>
           <p className="text-xl text-gray-400">لعبة الشدة ثلاثية الأبعاد</p>
         </div>
@@ -97,11 +111,11 @@ export default function Home() {
         {mode === 'menu' && (
           <div className="space-y-4">
             <button onClick={() => setMode('create')} className="btn-game w-64 block mx-auto">
-              🎮 إنشاء غرفة جديدة
+              إنشاء غرفة جديدة
             </button>
             <button onClick={() => setMode('join')} className="btn-game w-64 block mx-auto"
               style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)' }}>
-              🔗 انضمام لغرفة
+              انضمام لغرفة
             </button>
           </div>
         )}
@@ -118,7 +132,7 @@ export default function Home() {
               maxLength={20}
             />
             <button onClick={createGame} className="btn-game w-full" disabled={loading}>
-              {loading ? '⏳ جاري الإنشاء...' : '✨ أنشئ غرفة'}
+              {loading ? 'جاري الإنشاء...' : 'أنشئ غرفة'}
             </button>
             <button onClick={() => setMode('menu')} className="text-gray-400 hover:text-white transition">
               ← رجوع
@@ -147,7 +161,7 @@ export default function Home() {
               style={{ direction: 'ltr', letterSpacing: '0.3em' }}
             />
             <button onClick={joinGame} className="btn-game w-full" disabled={loading}>
-              {loading ? '⏳ جاري الانضمام...' : '🚀 انضم'}
+              {loading ? 'جاري الانضمام...' : 'انضم'}
             </button>
             <button onClick={() => setMode('menu')} className="text-gray-400 hover:text-white transition">
               ← رجوع

@@ -1,7 +1,7 @@
 'use client';
 
-import { Html } from '@react-three/drei';
 import { useGameStore } from '@/lib/gameStore';
+import Card3D from './Card3D';
 
 export default function PlayerHand() {
   const myHand = useGameStore(state => state.getMyHand());
@@ -10,47 +10,43 @@ export default function PlayerHand() {
 
   if (myHand.length === 0) return null;
 
-  const cardWidth = 0.7;
-  const totalWidth = myHand.length * cardWidth * 0.55;
-  const startX = -totalWidth / 2;
+  // ====== توزيع الكروت بشكل مروحة ======
+  const totalCards = myHand.length;
+  const spreadWidth = Math.min(totalCards * 0.22, 2.2); // عرض المروحة
+  const startX = -spreadWidth / 2;
+  const cardSpacing = spreadWidth / Math.max(totalCards - 1, 1);
+
+  // الارتفاع والعمق (قريب من الكاميرا)
+  const baseY = 0.7;
+  const baseZ = 1.5;
 
   return (
-    <group position={[0, 0.85, 1.3]}>
+    <group>
       {myHand.map((card, i) => {
         const isSelected = selectedCard?.id === card.id;
-        const x = startX + i * cardWidth * 0.55;
-        const y = isSelected ? 0.3 : 0;
-        const rotZ = (i - myHand.length / 2) * 0.02;
+
+        // حساب الموقع على المروحة
+        const t = totalCards > 1 ? i / (totalCards - 1) : 0.5; // 0 to 1
+        const x = startX + i * cardSpacing;
+
+        // انحناء خفيف للمروحة (القسم الوسطي أعلى قليلاً)
+        const curve = -Math.pow(t - 0.5, 2) * 0.15 + 0.04;
+        const y = baseY + curve;
+
+        // زاوية الدوران (ميلان خفيف من اليمين لليسار)
+        const fanAngle = (t - 0.5) * 0.15;  // ±0.075 راديان
+        const tiltX = -0.5; // ميلان للخلف عشان تشوف الكروت
 
         return (
-          <group
+          <Card3D
             key={card.id}
-            position={[x, y, 0]}
-            rotation={[isSelected ? -0.2 : -0.4, 0, rotZ]}
+            card={card}
+            position={[x, y, baseZ - Math.abs(t - 0.5) * 0.1]}
+            rotation={[tiltX, 0, fanAngle]}
+            selected={isSelected}
             onClick={() => selectCard(isSelected ? null : card)}
-          >
-            <mesh castShadow>
-              <boxGeometry args={[0.55, 0.8, 0.01]} />
-              <meshStandardMaterial color="white" />
-            </mesh>
-            <Html position={[0, 0, 0.01]} center transform>
-              <div
-                className="text-xs font-bold select-none cursor-pointer"
-                style={{
-                  color: card.suit === 'hearts' || card.suit === 'diamonds' ? 'red' : 'black',
-                  fontSize: '10px',
-                  width: '40px',
-                  textAlign: 'center',
-                }}
-              >
-                {card.rank}
-                <br />
-                {card.suit === 'hearts' ? '♥' :
-                  card.suit === 'diamonds' ? '♦' :
-                    card.suit === 'clubs' ? '♣' : '♠'}
-              </div>
-            </Html>
-          </group>
+            hoverable={true}
+          />
         );
       })}
     </group>

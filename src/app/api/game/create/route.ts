@@ -23,7 +23,21 @@ export async function POST(req: NextRequest) {
 
     if (playerError) throw playerError;
 
-    // إنشاء غرفة بكود فريد
+    // إنشاء كائن اللاعب الكامل للـ state
+    const hostPlayer = {
+      id: player.id,
+      name: playerName,
+      seatIndex: 0,
+      hand: [],
+      tricksWon: [],
+      score: 0,
+      cheatAccusationsLeft: 2,
+      hasCheated: false,
+      stolenCard: null,
+      isConnected: true,
+    };
+
+    // إنشاء غرفة بكود فريد — المضيف موجود بـ state.players من البداية
     const code = generateCode();
     const { data: game, error: gameError } = await supabase
       .from('games')
@@ -32,7 +46,7 @@ export async function POST(req: NextRequest) {
         host_id: player.id,
         phase: 'waiting',
         state: {
-          players: [],
+          players: [hostPlayer],
           playType: 'individual',
           dealNumber: 0,
           usedModes: [],
