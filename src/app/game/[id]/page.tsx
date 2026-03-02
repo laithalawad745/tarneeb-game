@@ -7,6 +7,7 @@ import { getPusherClient } from '@/lib/pusherClient';
 import { useGameStore } from '@/lib/gameStore';
 import { GameMode, PlayType } from '@/lib/types';
 import { MODE_NAMES } from '@/lib/gameLogic';
+import { storage } from '@/lib/storage';
 
 const Game3DScene = dynamic(() => import('@/components/Game3DScene'), { ssr: false });
 
@@ -42,32 +43,20 @@ export default function GamePage() {
   const hasFetched = useRef(false);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
-  // ============ جلب بيانات اللعبة (بدون cache) ============
+  // ============ جلب بيانات اللعبة ============
   const fetchGameData = useCallback(async (reason: string) => {
     try {
       console.log(`[FETCH] ${reason}`);
-      // ====== cache: 'no-store' يمنع أي caching ======
       const res = await fetch(`/api/game/${gameId}`, { cache: 'no-store' });
-      if (!res.ok) {
-        console.error(`[FETCH] فشل! Status: ${res.status}`);
-        return null;
-      }
+      if (!res.ok) { console.error(`[FETCH] فشل! Status: ${res.status}`); return null; }
 
       const data = await res.json();
       console.log(`[FETCH] نجح! اللاعبين: ${data.players?.length}`,
         data.players?.map((p: any) => p.playerName).join(', '));
 
-      if (data.players && data.players.length > 0) {
-        setPlayers(data.players);
-      }
-
-      if (data.state) {
-        setGameState(data.state);
-      }
-
-      if (data.phase && data.phase !== 'waiting') {
-        setPhase(data.phase);
-      }
+      if (data.players?.length > 0) setPlayers(data.players);
+      if (data.state) setGameState(data.state);
+      if (data.phase && data.phase !== 'waiting') setPhase(data.phase);
 
       return data;
     } catch (err) {
@@ -76,53 +65,46 @@ export default function GamePage() {
     }
   }, [gameId, setGameState]);
 
-  // ============ تهيئة اللاعب + قراءة البيانات المخزّنة ============
+  // ============ تهيئة اللاعب ============
   useEffect(() => {
-    const playerId = localStorage.getItem('playerId') || '';
-    const playerName = localStorage.getItem('playerName') || '';
-    const hostFlag = localStorage.getItem('isHost') === 'true';
+    const playerId   = storage.get('playerId');
+    const playerName = storage.get('playerName');
+    const hostFlag   = storage.get('isHost') === 'true';
+    const hostGameId = storage.get('hostGameId');
+
+    if (hostFlag && hostGameId && hostGameId !== gameId) {
+      console.warn(`[MISMATCH] hostGameId: ${hostGameId} | gameId: ${gameId}`);
+      storage.set('isHost', 'false');
+      setIsHost(false);
+    } else {
+      setIsHost(hostFlag);
+    }
+
     setMyPlayer(playerId, playerName);
     setMyId(playerId);
-    setIsHost(hostFlag);
-    console.log(`[INIT] أنا: ${playerName} (${playerId}) | مضيف: ${hostFlag}`);
+    console.log(`[INIT] 1 أنا: ${playerId} | مضيف: ${hostFlag} | hostGameId: ${hostGameId} | gameId: ${gameId}`);
 
-    // ====== قراءة اللاعبين المخزّنين فوراً (من الـ join response) ======
-    const cached = localStorage.getItem('cachedPlayers');
+    const cached = storage.get('cachedPlayers');
     if (cached) {
       try {
         const cachedPlayers: PlayerInfo[] = JSON.parse(cached);
-        console.log(`[INIT] لاعبين مخزّنين: ${cachedPlayers.length}`,
-          cachedPlayers.map(p => p.playerName).join(', '));
+        console.log(`[INIT] 1 لاعبين مخزّنين: ${cachedPlayers.length}`);
         setPlayers(cachedPlayers);
 
-        // بناء gameState أولي من البيانات المخزّنة
         const initialState = {
           id: gameId,
           players: cachedPlayers.map(p => ({
-            id: p.playerId,
-            name: p.playerName,
-            seatIndex: p.seatIndex,
-            hand: [],
-            tricksWon: [],
-            score: 0,
-            cheatAccusationsLeft: 2,
-            hasCheated: false,
-            stolenCard: null,
-            isConnected: true,
+            id: p.playerId, name: p.playerName, seatIndex: p.seatIndex,
+            hand: [], tricksWon: [], score: 0,
+            cheatAccusationsLeft: 2, hasCheated: false, stolenCard: null, isConnected: true,
           })),
           playType: 'individual' as PlayType,
-          dealNumber: 0,
-          phase: 'waiting' as const,
-          scores: {},
-          chooserIndex: 0,
-          usedModes: [],
-          currentDeal: null,
-          createdAt: new Date().toISOString(),
+          dealNumber: 0, phase: 'waiting' as const,
+          scores: {}, chooserIndex: 0, usedModes: [],
+          currentDeal: null, createdAt: new Date().toISOString(),
         };
         setGameState(initialState);
-
-        // مسح الكاش بعد الاستخدام
-        localStorage.removeItem('cachedPlayers');
+        storage.remove('cachedPlayers');
       } catch (e) {
         console.error('[INIT] خطأ بقراءة الكاش:', e);
       }
@@ -130,50 +112,37 @@ export default function GamePage() {
   }, [setMyPlayer, gameId, setGameState]);
 
   // ============ Fetch + Polling ============
+  const checkIfFull = useCallback((data: any) => {
+    if (data?.players?.length >= 4 && (data?.phase === 'waiting' || data?.phase === 'full')) {
+      setPhase('full');
+      if (storage.get('isHost') === 'true') setShowTypeSelect(true);
+      else setMessage('المضيف يختار نوع اللعب...');
+    }
+  }, []);
+
   useEffect(() => {
     if (hasFetched.current || !gameId) return;
     hasFetched.current = true;
 
-    // fetch أولي بعد ثانية (يعطي وقت للـ DB يتحدّث)
     const initialTimeout = setTimeout(async () => {
       const data = await fetchGameData('تحميل أولي');
       checkIfFull(data);
     }, 1000);
 
-    // polling كل 3 ثواني
     let pollCount = 0;
     pollingRef.current = setInterval(async () => {
       pollCount++;
-      if (pollCount > 10) {
-        if (pollingRef.current) clearInterval(pollingRef.current);
-        console.log('[POLL] توقّف بعد 30 ثانية');
-        return;
-      }
+      if (pollCount > 10) { clearInterval(pollingRef.current!); return; }
       const data = await fetchGameData(`polling #${pollCount}`);
       checkIfFull(data);
-
-      if (data?.phase && data.phase !== 'waiting') {
-        if (pollingRef.current) clearInterval(pollingRef.current);
-      }
+      if (data?.phase && data.phase !== 'waiting') clearInterval(pollingRef.current!);
     }, 3000);
 
     return () => {
       clearTimeout(initialTimeout);
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [gameId, fetchGameData]);
-
-  const checkIfFull = (data: any) => {
-    if (data?.players?.length >= 4 && (data?.phase === 'waiting' || phase === 'waiting')) {
-      setPhase('full');
-      const hostFlag = localStorage.getItem('isHost') === 'true';
-      if (hostFlag) {
-        setShowTypeSelect(true);
-      } else {
-        setMessage('المضيف يختار نوع اللعب...');
-      }
-    }
-  };
+  }, [gameId, fetchGameData, checkIfFull]);
 
   // ============ تحديث gameState.players ============
   const syncGameStatePlayers = useCallback((playerList: PlayerInfo[]) => {
@@ -182,20 +151,11 @@ export default function GamePage() {
 
     const updatedPlayers = playerList.map(p => {
       const existing = currentState.players.find(ep => ep.id === p.playerId);
-      if (existing) {
-        return { ...existing, name: p.playerName, seatIndex: p.seatIndex };
-      }
+      if (existing) return { ...existing, name: p.playerName, seatIndex: p.seatIndex };
       return {
-        id: p.playerId,
-        name: p.playerName,
-        seatIndex: p.seatIndex,
-        hand: [],
-        tricksWon: [],
-        score: 0,
-        cheatAccusationsLeft: 2,
-        hasCheated: false,
-        stolenCard: null,
-        isConnected: true,
+        id: p.playerId, name: p.playerName, seatIndex: p.seatIndex,
+        hand: [], tricksWon: [], score: 0,
+        cheatAccusationsLeft: 2, hasCheated: false, stolenCard: null, isConnected: true,
       };
     });
 
@@ -208,15 +168,12 @@ export default function GamePage() {
     const channel = pusher.subscribe(`game-${gameId}`);
     console.log(`[PUSHER] اشتركت بقناة: game-${gameId}`);
 
-    channel.bind('pusher:subscription_succeeded', () => {
-      console.log('[PUSHER] الاشتراك نجح!');
-    });
+    channel.bind('pusher:subscription_succeeded', () => console.log('[PUSHER] الاشتراك نجح!!'));
 
-    // --- لاعب جديد ---
     channel.bind('player-joined', (data: any) => {
       console.log(`[PUSHER] player-joined: ${data.playerName}, total: ${data.totalPlayers}, allPlayers: ${data.allPlayers?.length}`);
 
-      if (data.allPlayers && data.allPlayers.length > 0) {
+      if (data.allPlayers?.length > 0) {
         setPlayers(data.allPlayers);
         syncGameStatePlayers(data.allPlayers);
       } else {
@@ -231,12 +188,8 @@ export default function GamePage() {
       if (data.totalPlayers === 4) {
         setPhase('full');
         setMessage('الغرفة اكتملت!');
-        const hostFlag = localStorage.getItem('isHost') === 'true';
-        if (hostFlag) {
-          setShowTypeSelect(true);
-        } else {
-          setMessage('المضيف يختار نوع اللعب...');
-        }
+        if (storage.get('isHost') === 'true') setShowTypeSelect(true);
+        else setMessage('المضيف يختار نوع اللعب...');
         if (pollingRef.current) clearInterval(pollingRef.current);
       }
     });
@@ -247,17 +200,17 @@ export default function GamePage() {
       if (data.playType === 'individual') {
         setMessage('نوع اللعب: يهودي — كل واحد لحاله');
         setPhase('choosing_mode');
-        if (localStorage.getItem('isHost') === 'true') setShowModeSelect(true);
+        if (storage.get('isHost') === 'true') setShowModeSelect(true);
         else setMessage('المضيف يختار التسمية...');
       } else {
         setMessage('نوع اللعب: شراكة');
-        if (localStorage.getItem('isHost') === 'true') setShowPartnerSelect(true);
+        if (storage.get('isHost') === 'true') setShowPartnerSelect(true);
         else setMessage('المضيف يختار شريكه...');
       }
     });
 
     channel.bind('partner-request', (data: { hostId: string; hostName: string; partnerId: string }) => {
-      const myPlayerId = localStorage.getItem('playerId');
+      const myPlayerId = storage.get('playerId');
       if (myPlayerId === data.partnerId) {
         setPartnerRequestFrom(data.hostId);
         setPartnerRequestFromName(data.hostName);
@@ -270,7 +223,7 @@ export default function GamePage() {
 
     channel.bind('partner-rejected', (data: { partnerId: string; partnerName: string }) => {
       setShowPartnerRequest(false);
-      if (localStorage.getItem('isHost') === 'true') {
+      if (storage.get('isHost') === 'true') {
         setMessage(`${data.partnerName} رفض الشراكة — اختار غيره`);
         setShowPartnerSelect(true);
       } else {
@@ -282,16 +235,16 @@ export default function GamePage() {
       setShowPartnerSelect(false);
       setShowPartnerRequest(false);
       setPlayers(data.seating);
-      const myPlayerId = localStorage.getItem('playerId');
+      const myPlayerId = storage.get('playerId');
       const partner = data.seating.find(p => p.playerId === data.partnerId);
-      const host = data.seating.find(p => p.playerId === data.hostId);
-      if (myPlayerId === data.hostId) setMessage(`شريكك: ${partner?.playerName}`);
+      const host    = data.seating.find(p => p.playerId === data.hostId);
+      if (myPlayerId === data.hostId)     setMessage(`شريكك: ${partner?.playerName}`);
       else if (myPlayerId === data.partnerId) setMessage(`شريكك: ${host?.playerName}`);
       else setMessage(`${host?.playerName} و ${partner?.playerName} فريق`);
 
       setTimeout(() => {
         setPhase('choosing_mode');
-        if (localStorage.getItem('isHost') === 'true') setShowModeSelect(true);
+        if (storage.get('isHost') === 'true') setShowModeSelect(true);
         else setMessage('المضيف يختار التسمية...');
       }, 2000);
     });
@@ -304,15 +257,12 @@ export default function GamePage() {
     });
 
     channel.bind('card-played', (data: any) => { if (data.state) setGameState(data.state); });
-
-    channel.bind('round-end', (data: any) => {
-      if (data.state) setGameState(data.state);
-    });
+    channel.bind('round-end',   (data: any) => { if (data.state) setGameState(data.state); });
 
     channel.bind('deal-end', (data: any) => {
       if (data.state) setGameState(data.state);
       setPhase('choosing_mode');
-      if (localStorage.getItem('isHost') === 'true') setShowModeSelect(true);
+      if (storage.get('isHost') === 'true') setShowModeSelect(true);
       setMessage('البرتية خلصت!');
     });
 
@@ -327,7 +277,7 @@ export default function GamePage() {
 
   // ============ إرسال أكشن ============
   const sendAction = useCallback(async (action: string, payload: any = {}) => {
-    const playerId = localStorage.getItem('playerId');
+    const playerId = storage.get('playerId');
     console.log(`[ACTION] ${action}`, payload);
     try {
       const res = await fetch('/api/game/action', {
@@ -348,10 +298,12 @@ export default function GamePage() {
       `| gameState.players: ${gameState?.players?.length || 0}`, `| phase: ${phase}`);
   }, [players, gameState, phase]);
 
+  // ============ UI ============
   return (
     <div className="w-screen h-screen relative overflow-hidden">
       <div className="game-canvas"><Game3DScene /></div>
       <div className="game-ui">
+
         <div className="absolute top-4 left-1/2 -translate-x-1/2">
           <div className="player-badge text-center">
             <div className="text-xs text-gray-400">كود الغرفة</div>
@@ -380,13 +332,9 @@ export default function GamePage() {
                   ))}
                 </div>
               )}
-              {/* ====== زر ابدأ للمضيف لما يكتمل 4 لاعبين ====== */}
               {players.length >= 4 && isHost ? (
-                <button
-                  onClick={() => setShowTypeSelect(true)}
-                  className="btn-game w-full mt-3 text-lg"
-                  style={{ animation: 'pulse 2s infinite' }}
-                >
+                <button onClick={() => setShowTypeSelect(true)}
+                  className="btn-game w-full mt-3 text-lg" style={{ animation: 'pulse 2s infinite' }}>
                   ابدأ اللعبة
                 </button>
               ) : players.length >= 4 ? (
@@ -471,13 +419,16 @@ export default function GamePage() {
                 {(['queens', 'diamonds', 'tricks', 'tarneeb'] as GameMode[]).map(mode => {
                   const used = gameState?.usedModes?.includes(mode);
                   return (
-                    <button key={mode} onClick={() => !used && sendAction('choose_mode', { mode })} disabled={used}
+                    <button key={mode} onClick={() => !used && sendAction('choose_mode', { mode })}
+                      disabled={used}
                       className={`btn-game ${used ? 'opacity-30 cursor-not-allowed' : ''}`}
                       style={!used ? {
-                        background: mode === 'queens' ? 'linear-gradient(135deg, #ec4899, #be185d)' :
+                        background:
+                          mode === 'queens'   ? 'linear-gradient(135deg, #ec4899, #be185d)' :
                           mode === 'diamonds' ? 'linear-gradient(135deg, #f59e0b, #d97706)' :
-                            mode === 'tricks' ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' :
-                              'linear-gradient(135deg, #ef4444, #991b1b)', color: 'white',
+                          mode === 'tricks'   ? 'linear-gradient(135deg, #3b82f6, #1d4ed8)' :
+                                               'linear-gradient(135deg, #ef4444, #991b1b)',
+                        color: 'white',
                       } : undefined}>
                       {mode === 'queens' && 'بنات'}{mode === 'diamonds' && 'ديناري'}
                       {mode === 'tricks' && 'لطش'}{mode === 'tarneeb' && 'تركس'}{used && ' ✓'}
@@ -499,6 +450,7 @@ export default function GamePage() {
             )}
           </div>
         )}
+
       </div>
     </div>
   );

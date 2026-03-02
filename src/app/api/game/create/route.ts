@@ -23,7 +23,6 @@ export async function POST(req: NextRequest) {
 
     if (playerError) throw playerError;
 
-    // إنشاء كائن اللاعب الكامل للـ state
     const hostPlayer = {
       id: player.id,
       name: playerName,
@@ -37,8 +36,22 @@ export async function POST(req: NextRequest) {
       isConnected: true,
     };
 
-    // إنشاء غرفة بكود فريد — المضيف موجود بـ state.players من البداية
-    const code = generateCode();
+    // إنشاء غرفة بكود فريد
+    let code = generateCode();
+    let attempts = 0;
+
+    // ← تأكد إن الكود فريد (يمنع التعارض)
+    while (attempts < 5) {
+      const { data: existing } = await supabase
+        .from('games')
+        .select('id')
+        .eq('code', code)
+        .single();
+      if (!existing) break;
+      code = generateCode();
+      attempts++;
+    }
+
     const { data: game, error: gameError } = await supabase
       .from('games')
       .insert({
@@ -47,6 +60,7 @@ export async function POST(req: NextRequest) {
         phase: 'waiting',
         state: {
           players: [hostPlayer],
+          hostPlayerId: player.id,   // ← مهم: نحفظه هون كـ fallback
           playType: 'individual',
           dealNumber: 0,
           usedModes: [],
@@ -59,7 +73,7 @@ export async function POST(req: NextRequest) {
 
     if (gameError) throw gameError;
 
-    // إضافة اللاعب المضيف للغرفة
+    // إضافة المضيف لجدول game_players
     const { error: joinError } = await supabase
       .from('game_players')
       .insert({
@@ -70,13 +84,17 @@ export async function POST(req: NextRequest) {
 
     if (joinError) throw joinError;
 
+    console.log(`[CREATE] غرفة جديدة: ${code} | host: ${player.id} | game: ${game.id}`);
+
     return NextResponse.json({
       gameId: game.id,
       gameCode: code,
       playerId: player.id,
+      hostId: player.id,   // ← نرجعه للكلاينت عشان يخزنه
       seatIndex: 0,
     });
   } catch (error: any) {
+    console.error('[CREATE] خطأ:', error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
