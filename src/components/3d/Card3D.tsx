@@ -11,14 +11,12 @@ interface Card3DProps {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: number;
-  faceDown?: boolean;     // مقلوب (ظهر الكرت)
+  faceDown?: boolean;
   onClick?: () => void;
   selected?: boolean;
   hoverable?: boolean;
 }
 
-// حجم الكرت بالمودل: ~50 x 100 x 1
-// نصغّره بـ 0.006 عشان يتناسب مع المشهد (~0.3 x 0.6)
 const BASE_SCALE = 0.006;
 
 export default function Card3D({
@@ -33,12 +31,12 @@ export default function Card3D({
 }: Card3DProps) {
   const groupRef = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
-  const { cardNodes } = useCardDeck();
+  const { cardNodes, cardOffsets } = useCardDeck();
 
   const cardId = `${card.suit}_${card.rank}`;
   const originalNode = cardNodes[cardId];
+  const zOffset = cardOffsets[cardId] || 0;
 
-  // أنيميشن سلسة للارتفاع عند التحديد/الهوفر
   useFrame(() => {
     if (!groupRef.current) return;
     const targetY = position[1] + (selected ? 0.15 : hovered ? 0.05 : 0);
@@ -55,7 +53,7 @@ export default function Card3D({
       position={position}
       rotation={[
         rotation[0],
-        rotation[1] + (faceDown ? Math.PI : 0), // لو مقلوب — ندوّره 180 درجة
+        rotation[1] + (faceDown ? Math.PI : 0),
         rotation[2],
       ]}
       scale={[finalScale, finalScale, finalScale]}
@@ -77,7 +75,9 @@ export default function Card3D({
         }
       }}
     >
-      <primitive object={originalNode.clone(true)} />
+      <group position={[0, 0, -zOffset]}>
+        <primitive object={originalNode.clone(true)} />
+      </group>
     </group>
   );
 }

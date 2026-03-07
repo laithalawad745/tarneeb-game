@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { Environment, PerspectiveCamera } from '@react-three/drei';
+import { PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
 import { useGameStore } from '@/lib/gameStore';
 
@@ -119,7 +119,7 @@ export default function Game3DScene() {
         <pointLight position={[0, 1.2, 0]} intensity={0.4} color="#ffcc66" distance={4} />
 
         {/* البيئة */}
-        <Environment preset="night" />
+<hemisphereLight args={['#1a1a3e', '#0a0e17', 0.3]} />
         <fog attach="fog" args={['#0a0e17', 6, 20]} />
 
         {/* الأرضية */}

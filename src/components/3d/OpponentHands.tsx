@@ -55,25 +55,25 @@ export default function OpponentHands() {
 
   // ====== مواقع الأيدي حول الطاولة ======
   // مقعد 1 = يمين، مقعد 2 = مقابل، مقعد 3 = يسار
-  const handConfigs: Record<number, {
+const handConfigs: Record<number, {
     basePos: [number, number, number];
-    cardDir: [number, number, number]; // اتجاه توزيع الكروت
-    cardRot: [number, number, number]; // دوران الكرت
+    cardDir: [number, number, number];
+    cardRot: [number, number, number];
   }> = {
     1: { // يمين
       basePos: [0.95, 0.82, 0.35],
-      cardDir: [0, 0, -0.06],      // يتوزعو عمودياً
-      cardRot: [-Math.PI / 2, 0, Math.PI / 2],
+      cardDir: [0, 0, -0.06],
+      cardRot: [0, -Math.PI / 2, 0],
     },
     2: { // مقابل
       basePos: [-0.35, 0.82, -0.75],
-      cardDir: [0.06, 0, 0],        // يتوزعو أفقياً
-      cardRot: [-Math.PI / 2, 0, Math.PI],
+      cardDir: [0.06, 0, 0],
+      cardRot: [0, Math.PI, 0],
     },
     3: { // يسار
       basePos: [-0.95, 0.82, -0.35],
-      cardDir: [0, 0, 0.06],        // يتوزعو عمودياً
-      cardRot: [-Math.PI / 2, 0, -Math.PI / 2],
+      cardDir: [0, 0, 0.06],
+      cardRot: [0, Math.PI / 2, 0],
     },
   };
 

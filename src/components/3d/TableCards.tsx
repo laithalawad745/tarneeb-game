@@ -1,7 +1,51 @@
 'use client';
 
+import { Html } from '@react-three/drei';
 import { useGameStore } from '@/lib/gameStore';
-import Card3D from './Card3D';
+import { Card, Suit } from '@/lib/types';
+
+const SUIT_SYMBOLS: Record<Suit, string> = {
+  hearts: '♥',
+  diamonds: '♦',
+  clubs: '♣',
+  spades: '♠',
+};
+
+const SUIT_COLORS: Record<Suit, string> = {
+  hearts: '#e74c3c',
+  diamonds: '#e74c3c',
+  clubs: '#1a1a2e',
+  spades: '#1a1a2e',
+};
+
+function CardFace({ card }: { card: Card }) {
+  const symbol = SUIT_SYMBOLS[card.suit];
+  const color = SUIT_COLORS[card.suit];
+
+  return (
+    <div style={{
+      width: '50px',
+      height: '70px',
+      background: 'white',
+      borderRadius: '5px',
+      border: '2px solid #ccc',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+      userSelect: 'none',
+      pointerEvents: 'none',
+    }}>
+      <div style={{ color, fontSize: '16px', fontWeight: 'bold' }}>
+        {card.rank}
+      </div>
+      <div style={{ color, fontSize: '22px' }}>
+        {symbol}
+      </div>
+    </div>
+  );
+}
 
 export default function TableCards() {
   const gameState = useGameStore(state => state.gameState);
@@ -12,35 +56,31 @@ export default function TableCards() {
   const currentRound = gameState.currentDeal.rounds[gameState.currentDeal.currentRound];
   if (!currentRound) return null;
 
-  // ====== مواقع الكروت الـ 4 على الطاولة ======
-  // نحسب الموقع النسبي لكل لاعب بالنسبة لنا
   const myIndex = gameState.players.findIndex(p => p.id === myPlayerId) || 0;
 
-  // مقعد 0 = أنت (أقرب)، 1 = يمين، 2 = مقابل، 3 = يسار
-  const seatPositions: { pos: [number, number, number]; rot: [number, number, number] }[] = [
-    { pos: [0, 0.78, 0.3],   rot: [-Math.PI / 2, 0, 0] },            // أنت
-    { pos: [0.35, 0.78, 0],  rot: [-Math.PI / 2, 0, 0.3] },          // يمين
-    { pos: [0, 0.78, -0.3],  rot: [-Math.PI / 2, 0, Math.PI] },      // مقابل
-    { pos: [-0.35, 0.78, 0], rot: [-Math.PI / 2, 0, -0.3] },         // يسار
+const seatPositions: [number, number, number][] = [
+    [0, 0.85, 0.45],      // أنت (قريب منك)
+    [0.45, 0.85, 0],      // يمين (قريب من اليمين)
+    [0, 0.85, -0.45],     // مقابل (قريب من المقابل)
+    [-0.45, 0.85, 0],     // يسار (قريب من اليسار)
   ];
 
   return (
     <group>
       {currentRound.cardsPlayed.map((play, i) => {
-        // حساب المقعد النسبي
         const playerIndex = gameState.players.findIndex(p => p.id === play.playerId);
         const relativeSeat = (playerIndex - myIndex + 4) % 4;
-        const { pos, rot } = seatPositions[relativeSeat] || seatPositions[0];
+        const pos = seatPositions[relativeSeat] || seatPositions[0];
 
         return (
-          <Card3D
+          <Html
             key={`${play.card.id}-${i}`}
-            card={play.card}
             position={pos}
-            rotation={rot}
-            scale={0.8}
-            hoverable={false}
-          />
+            center
+            distanceFactor={2}
+          >
+            <CardFace card={play.card} />
+          </Html>
         );
       })}
     </group>

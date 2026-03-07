@@ -304,18 +304,20 @@ export default function GamePage() {
       <div className="game-canvas"><Game3DScene /></div>
       <div className="game-ui">
 
-        <div className="absolute top-4 left-1/2 -translate-x-1/2">
-          <div className="player-badge text-center">
-            <div className="text-xs text-gray-400">كود الغرفة</div>
-            <div className="text-xl font-bold tracking-widest" style={{ color: '#d4a843', direction: 'ltr' }}>{gameCode}</div>
-          </div>
-        </div>
+{players.length < 4 && (
+  <div className="absolute top-4 left-1/2 -translate-x-1/2">
+    <div className="player-badge text-center">
+      <div className="text-xs text-gray-400">كود الغرفة</div>
+      <div className="text-xl font-bold tracking-widest" style={{ color: '#d4a843', direction: 'ltr' }}>{gameCode}</div>
+    </div>
+  </div>
+)}
 
-        {message && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2">
-            <div className="player-badge text-center animate-pulse">{message}</div>
-          </div>
-        )}
+  {message && (
+  <div className="absolute top-4 left-1/2 -translate-x-1/2">
+    <div className="player-badge text-center animate-pulse">{message}</div>
+  </div>
+)}
 
         {(phase === 'waiting' || phase === 'full') && !showTypeSelect && (
           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-center">
